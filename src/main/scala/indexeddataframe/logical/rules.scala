@@ -134,7 +134,7 @@ object ConvertToIndexedOperators extends Rule[LogicalPlan] {
       * replace Spark's default .cache() method with our own cache implementation
       * for indexed data frames
       */
-    case InMemoryRelationMatcher(output, _, child : IndexedOperatorExec) =>
+    case InMemoryRelationMatcher(output, child : IndexedOperatorExec) =>
       IndexedBlockRDD(output, getIfCached(child), child)
 
     /**

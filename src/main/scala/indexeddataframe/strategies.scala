@@ -33,23 +33,9 @@ object IndexedOperators extends Strategy {
     case IndexedJoin(left, right, joinType, condition) =>
       Join(left, right, joinType, condition) match {
         case ExtractEquiJoinKeys(_, leftKeys, rightKeys, _, lChild, rChild) => {
-          // compute the index of the left side keys == column number
-          var leftColNo = 0
-          var i = 0
-          lChild.output.foreach( col => {
-            if (col == leftKeys(0)) leftColNo = i
-            i += 1
-          })
-
-          // compute the index of the right side keys == column number
-          var rightColNo = 0
-          i = 0
-          rChild.output.foreach( col => {
-            if (col == rightKeys(0)) rightColNo = i
-            i += 1
-          })
-
-          //println("leftcol = %d, rightcol = %d".format(leftColNo, rightColNo))
+          val leftColNo = lChild.output.indexWhere(leftKeys(0).toString() == _.toString())
+          val rightColNo = rChild.output.indexWhere(rightKeys(0).toString() == _.toString())
+          println("leftcol = %d, rightcol = %d".format(leftColNo, rightColNo))
           IndexedShuffledEquiJoinExec(planLater(left), planLater(right), leftColNo, rightColNo, leftKeys, rightKeys) :: Nil
         }
         case _ => Nil

@@ -3,7 +3,7 @@ package indexeddataframe
 
 import org.apache.spark.sql.Strategy
 import org.apache.spark.sql.catalyst.plans.logical.{Join, LogicalPlan}
-import org.apache.spark.sql.execution.SparkPlan
+import org.apache.spark.sql.execution.{FilterExec, SparkPlan}
 import indexeddataframe.execution._
 import indexeddataframe.logical._
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, Expression, Literal, NamedExpression}
@@ -32,11 +32,17 @@ object IndexedOperators extends Strategy {
     case IndexedFilter(condition, child) => IndexedFilterExec(condition, planLater(child)) :: Nil
     case IndexedJoin(left, right, joinType, condition) =>
       Join(left, right, joinType, condition) match {
-        case ExtractEquiJoinKeys(_, leftKeys, rightKeys, _, lChild, rChild) => {
+        case ExtractEquiJoinKeys(_, leftKeys, rightKeys, condition, lChild, rChild) => {
           val leftColNo = lChild.output.indexWhere(leftKeys(0).toString() == _.toString())
           val rightColNo = rChild.output.indexWhere(rightKeys(0).toString() == _.toString())
           println("leftcol = %d, rightcol = %d".format(leftColNo, rightColNo))
-          IndexedShuffledEquiJoinExec(planLater(left), planLater(right), leftColNo, rightColNo, leftKeys, rightKeys) :: Nil
+//          println(condition.get.sql)
+          val subPlan = IndexedShuffledEquiJoinExec(planLater(left), planLater(right), leftColNo, rightColNo, leftKeys, rightKeys)
+          if (condition.isEmpty) {
+            subPlan :: Nil
+          } else {
+            FilterExec(condition.get, subPlan) :: Nil
+          }
         }
         case _ => Nil
       }

@@ -1,0 +1,290 @@
+-diff --git a/src/main/scala/indexeddataframe/InternalIndexedDF.scala b/src/main/scala/indexeddataframe/InternalIndexedDF.scala
+-index 5aca7d9..969e075 100644
+---- a/src/main/scala/indexeddataframe/InternalIndexedDF.scala
+-+++ b/src/main/scala/indexeddataframe/InternalIndexedDF.scala
+-@@ -374,10 +374,16 @@ class InternalIndexedDF {
+-     }
+-   }
+- 
+--  def multigetJoinedLeft(leftIter: Iterator[InternalRow], joiner: UnsafeRowJoiner, leftOutput: Seq[Attribute], joinLeftCol: Int): Iterator[InternalRow] = {
+-+  def multigetJoinedLeft(leftIter: Iterator[InternalRow], joiner: UnsafeRowJoiner, leftOutput: Seq[Attribute], joinLeftCol: Int , hardCodeCondLeftCol: Int, hardCodeCondRightCol: Int): Iterator[InternalRow] = {
+-     leftIter.flatMap { leftRow =>
+-       val leftKey = leftRow.get(joinLeftCol, schema(indexCol).dataType)
+--      get(leftKey.asInstanceOf[AnyVal]).map { rightRow =>
+-+      val hardCodeCondLeftKey = leftRow.getInt(hardCodeCondLeftCol)
+-+      get(leftKey.asInstanceOf[AnyVal])
+-+        .filter(rightRow => {
+-+        val hardCodeCondRightKey = rightRow.getInt(hardCodeCondRightCol)
+-+        hardCodeCondRightKey < hardCodeCondLeftKey
+-+      })
+-+        .map { rightRow =>
+-         joiner.join(leftRow.asInstanceOf[UnsafeRow], rightRow.asInstanceOf[UnsafeRow])
+-       }
+-     }
+-diff --git a/src/main/scala/indexeddataframe/execution/operators.scala b/src/main/scala/indexeddataframe/execution/operators.scala
+-index 82beb5a..a30bfc0 100644
+---- a/src/main/scala/indexeddataframe/execution/operators.scala
+-+++ b/src/main/scala/indexeddataframe/execution/operators.scala
+-@@ -7,7 +7,7 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeSet, Equal
+- import indexeddataframe.{IRDD, InternalIndexedDF, Utils}
+- import org.apache.spark.sql.catalyst.expressions.codegen.GenerateUnsafeRowJoiner
+- import org.apache.spark.sql.catalyst.plans.physical._
+--import org.apache.spark.sql.types.{IntegerType, StructField, StructType}
+-+import org.apache.spark.sql.types.{IntegerType, LongType, StructField, StructType}
+- import org.slf4j.LoggerFactory
+- 
+- trait LeafExecNode extends SparkPlan {
+-@@ -237,19 +237,21 @@ case class IndexedShuffledEquiJoinExec(left: SparkPlan, right: SparkPlan, leftCo
+-       }
+-       case _ => {
+-         val leftRDD = left.execute()
+--        val rightRDD = right.asInstanceOf[IndexedOperatorExec].executeIndexed()
+-+        val rightRDD = right.asInstanceOf[IndexedOperatorExec].execute()
+-+        val hardCodeCondLeftCol = left.output.indexWhere(_.name == "cs_quantity")
+-+        val hardCodeCondRightCol = right.output.indexWhere(_.name == "inv_quantity_on_hand")
+-+        rightSchema.add("prev", LongType)
+- 
+--        val result = rightRDD.partitionsRDD.zipPartitions(leftRDD, true) { (rightIter, leftIter) =>
+-+//        println(hardCodeCondLeftCol, hardCodeCondRightCol)
+-+
+-+        rightRDD.asInstanceOf[IRDD].partitionsRDD.zipPartitions(leftRDD, true) { (rightIter, leftIter) =>
+-           // generate an unsafe row joiner
+--          rightSchema.add("prev", IntegerType)
+-           val joiner = GenerateUnsafeRowJoiner.create(leftSchema, rightSchema)
+-           if (rightIter.hasNext) {
+--            val result = rightIter.next().multigetJoinedLeft(leftIter, joiner, left.output, leftCol)
+--            result
+-+            rightIter.next().multigetJoinedLeft(leftIter, joiner, left.output, leftCol, hardCodeCondLeftCol, hardCodeCondRightCol)
+-           }
+-           else Iterator(null)
+-         }
+--        result
+-       }
+-     }
+-   }
+-diff --git a/src/main/scala/indexeddataframe/strategies.scala b/src/main/scala/indexeddataframe/strategies.scala
+-index 0c42c6b..8616e44 100644
+---- a/src/main/scala/indexeddataframe/strategies.scala
+-+++ b/src/main/scala/indexeddataframe/strategies.scala
+-@@ -37,12 +37,13 @@ object IndexedOperators extends Strategy {
+-           val rightColNo = rChild.output.indexWhere(rightKeys(0).toString() == _.toString())
+-           println("leftcol = %d, rightcol = %d".format(leftColNo, rightColNo))
+- //          println(condition.get.sql)
+-+
+-           val subPlan = IndexedShuffledEquiJoinExec(planLater(left), planLater(right), leftColNo, rightColNo, leftKeys, rightKeys)
+--          if (condition.isEmpty) {
+-+//          if (condition.isEmpty) {
+-             subPlan :: Nil
+--          } else {
+--            FilterExec(condition.get, subPlan) :: Nil
+--          }
+-+//          } else {
+-+//            FilterExec(condition.get, subPlan) :: Nil
+-+//          }
+-         }
+-         case _ => Nil
+-       }
+diff --git a/src/main/scala/indexeddataframe/InternalIndexedDF.scala b/src/main/scala/indexeddataframe/InternalIndexedDF.scala
+index 5aca7d9..debec46 100644
+--- a/src/main/scala/indexeddataframe/InternalIndexedDF.scala
++++ b/src/main/scala/indexeddataframe/InternalIndexedDF.scala
+@@ -365,19 +365,29 @@ class InternalIndexedDF {
+     * @param keys
+     * @return
+     */
+-  def multigetJoinedRight(rightIter: Iterator[InternalRow], joiner: UnsafeRowJoiner, rightOutput: Seq[Attribute], joinRightCol: Int): Iterator[InternalRow] = {
++  def multigetJoinedRight(rightIter: Iterator[InternalRow], joiner: UnsafeRowJoiner, rightOutput: Seq[Attribute], joinRightCol: Int, hardCodeCondLeftCol: Int, hardCodeCondRightCol: Int): Iterator[InternalRow] = {
+     rightIter.flatMap { rightRow =>
+       val rightKey = rightRow.get(joinRightCol, schema(indexCol).dataType)
+-      get(rightKey.asInstanceOf[AnyVal]).map { leftRow =>
++      val hardCodeCondRightKey = rightRow.getInt(hardCodeCondRightCol)
++      get(rightKey.asInstanceOf[AnyVal]).filter( leftRow => {
++        val hardCodeCondLeftKey = leftRow.getInt(hardCodeCondLeftCol)
++        hardCodeCondRightKey < hardCodeCondLeftKey
++      }).map { leftRow =>
+         joiner.join(leftRow.asInstanceOf[UnsafeRow], rightRow.asInstanceOf[UnsafeRow])
+       }
+     }
+   }
+ 
+-  def multigetJoinedLeft(leftIter: Iterator[InternalRow], joiner: UnsafeRowJoiner, leftOutput: Seq[Attribute], joinLeftCol: Int): Iterator[InternalRow] = {
++  def multigetJoinedLeft(leftIter: Iterator[InternalRow], joiner: UnsafeRowJoiner, leftOutput: Seq[Attribute], joinLeftCol: Int , hardCodeCondLeftCol: Int, hardCodeCondRightCol: Int): Iterator[InternalRow] = {
+     leftIter.flatMap { leftRow =>
+       val leftKey = leftRow.get(joinLeftCol, schema(indexCol).dataType)
+-      get(leftKey.asInstanceOf[AnyVal]).map { rightRow =>
++      val hardCodeCondLeftKey = leftRow.getInt(hardCodeCondLeftCol)
++      get(leftKey.asInstanceOf[AnyVal])
++        .filter(rightRow => {
++        val hardCodeCondRightKey = rightRow.getInt(hardCodeCondRightCol)
++        hardCodeCondRightKey < hardCodeCondLeftKey
++      })
++        .map { rightRow =>
+         joiner.join(leftRow.asInstanceOf[UnsafeRow], rightRow.asInstanceOf[UnsafeRow])
+       }
+     }
+diff --git a/src/main/scala/indexeddataframe/Utils.scala b/src/main/scala/indexeddataframe/Utils.scala
+index e1beee2..6162f05 100644
+--- a/src/main/scala/indexeddataframe/Utils.scala
++++ b/src/main/scala/indexeddataframe/Utils.scala
+@@ -142,17 +142,17 @@ class IRDD(val colNo: Int, var partitionsRDD: RDD[InternalIndexedDF])
+     * @param joinRightCol
+     * @return
+     */
+-  def multigetBroadcast(rightRDD: Broadcast[Array[InternalRow]],
+-                        leftSchema: StructType,
+-                        rightSchema: StructType,
+-                        rightOutput: Seq[Attribute],
+-                        joinRightCol: Int): RDD[InternalRow] = {
+-    val res = partitionsRDD.mapPartitions[InternalRow](
+-      part => {
+-        val joiner = GenerateUnsafeRowJoiner.create(leftSchema, rightSchema)
+-        val res = part.next().multigetJoinedRight(rightRDD.value.toIterator, joiner, rightOutput, joinRightCol)
+-        res
+-      }, true)
+-    res
+-  }
++//  def multigetBroadcast(rightRDD: Broadcast[Array[InternalRow]],
++//                        leftSchema: StructType,
++//                        rightSchema: StructType,
++//                        rightOutput: Seq[Attribute],
++//                        joinRightCol: Int): RDD[InternalRow] = {
++//    val res = partitionsRDD.mapPartitions[InternalRow](
++//      part => {
++//        val joiner = GenerateUnsafeRowJoiner.create(leftSchema, rightSchema)
++//        val res = part.next().multigetJoinedRight(rightRDD.value.toIterator, joiner, rightOutput, joinRightCol)
++//        res
++//      }, true)
++//    res
++//  }
+ }
+diff --git a/src/main/scala/indexeddataframe/execution/operators.scala b/src/main/scala/indexeddataframe/execution/operators.scala
+index 82beb5a..78a65a2 100644
+--- a/src/main/scala/indexeddataframe/execution/operators.scala
++++ b/src/main/scala/indexeddataframe/execution/operators.scala
+@@ -7,7 +7,7 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeSet, Equal
+ import indexeddataframe.{IRDD, InternalIndexedDF, Utils}
+ import org.apache.spark.sql.catalyst.expressions.codegen.GenerateUnsafeRowJoiner
+ import org.apache.spark.sql.catalyst.plans.physical._
+-import org.apache.spark.sql.types.{IntegerType, StructField, StructType}
++import org.apache.spark.sql.types.{IntegerType, LongType, StructField, StructType}
+ import org.slf4j.LoggerFactory
+ 
+ trait LeafExecNode extends SparkPlan {
+@@ -222,34 +222,35 @@ case class IndexedShuffledEquiJoinExec(left: SparkPlan, right: SparkPlan, leftCo
+       case _: IndexedOperatorExec => {
+         val leftRDD = left.asInstanceOf[IndexedOperatorExec].executeIndexed()
+         val rightRDD = right.execute()
++        val hardCodeCondLeftCol = left.output.indexWhere(_.name == "cs_quantity")
++        val hardCodeCondRightCol = right.output.indexWhere(_.name == "inv_quantity_on_hand")
++        leftSchema.add("prev", IntegerType)
+ 
+-        val result = leftRDD.partitionsRDD.zipPartitions(rightRDD, true) { (leftIter, rightIter) =>
++        leftRDD.partitionsRDD.zipPartitions(rightRDD, true) { (leftIter, rightIter) =>
+           // generate an unsafe row joiner
+-          leftSchema.add("prev", IntegerType)
+           val joiner = GenerateUnsafeRowJoiner.create(leftSchema, rightSchema)
+           if (leftIter.hasNext) {
+-            val result = leftIter.next().multigetJoinedRight(rightIter, joiner, right.output, rightCol)
++            val result = leftIter.next().multigetJoinedRight(rightIter, joiner, right.output, rightCol, hardCodeCondLeftCol, hardCodeCondRightCol)
+             result
+           }
+           else Iterator(null)
+         }
+-        result
+       }
+       case _ => {
+         val leftRDD = left.execute()
+-        val rightRDD = right.asInstanceOf[IndexedOperatorExec].executeIndexed()
++        val rightRDD = right.asInstanceOf[IndexedOperatorExec].execute()
++        val hardCodeCondLeftCol = left.output.indexWhere(_.name == "cs_quantity")
++        val hardCodeCondRightCol = right.output.indexWhere(_.name == "inv_quantity_on_hand")
++        rightSchema.add("prev", LongType)
+ 
+-        val result = rightRDD.partitionsRDD.zipPartitions(leftRDD, true) { (rightIter, leftIter) =>
++        rightRDD.asInstanceOf[IRDD].partitionsRDD.zipPartitions(leftRDD, true) { (rightIter, leftIter) =>
+           // generate an unsafe row joiner
+-          rightSchema.add("prev", IntegerType)
+           val joiner = GenerateUnsafeRowJoiner.create(leftSchema, rightSchema)
+           if (rightIter.hasNext) {
+-            val result = rightIter.next().multigetJoinedLeft(leftIter, joiner, left.output, leftCol)
+-            result
++            rightIter.next().multigetJoinedLeft(leftIter, joiner, left.output, leftCol, hardCodeCondLeftCol, hardCodeCondRightCol)
+           }
+           else Iterator(null)
+         }
+-        result
+       }
+     }
+   }
+@@ -263,26 +264,26 @@ case class IndexedShuffledEquiJoinExec(left: SparkPlan, right: SparkPlan, leftCo
+   * @param leftCol
+   * @param rightCol
+   */
+-case class IndexedBroadcastEquiJoinExec(left: SparkPlan, right: SparkPlan, leftCol: Int, rightCol: Int) extends BinaryExecNode {
+-  private val logger = LoggerFactory.getLogger(classOf[IndexedBroadcastEquiJoinExec])
+-
+-  override def output: Seq[Attribute] = left.output ++ right.output
+-
+-  override def doExecute(): RDD[InternalRow] = {
+-    logger.debug("in the Broadcast JOIN operator")
+-
+-    val leftSchema = StructType(left.output.map(a => StructField(a.name, a.dataType, a.nullable, a.metadata)))
+-    val rightSchema = StructType(right.output.map(a => StructField(a.name, a.dataType, a.nullable, a.metadata)))
+-
+-    val leftRDD = left.asInstanceOf[IndexedOperatorExec].executeIndexed()
+-    val t1 = System.nanoTime()
+-    // broadcast the right relation
+-    val rightRDD = sparkContext.broadcast(right.executeCollect())
+-    val t2 = System.nanoTime()
+-
+-    logger.debug("collect + broadcast time = %f".format( (t2-t1) / 1000000.0))
+-
+-    val result = leftRDD.multigetBroadcast(rightRDD, leftSchema, rightSchema, right.output, rightCol)
+-    result
+-  }
+-}
++//case class IndexedBroadcastEquiJoinExec(left: SparkPlan, right: SparkPlan, leftCol: Int, rightCol: Int) extends BinaryExecNode {
++//  private val logger = LoggerFactory.getLogger(classOf[IndexedBroadcastEquiJoinExec])
++//
++//  override def output: Seq[Attribute] = left.output ++ right.output
++//
++//  override def doExecute(): RDD[InternalRow] = {
++//    logger.debug("in the Broadcast JOIN operator")
++//
++//    val leftSchema = StructType(left.output.map(a => StructField(a.name, a.dataType, a.nullable, a.metadata)))
++//    val rightSchema = StructType(right.output.map(a => StructField(a.name, a.dataType, a.nullable, a.metadata)))
++//
++//    val leftRDD = left.asInstanceOf[IndexedOperatorExec].executeIndexed()
++//    val t1 = System.nanoTime()
++//    // broadcast the right relation
++//    val rightRDD = sparkContext.broadcast(right.executeCollect())
++//    val t2 = System.nanoTime()
++//
++//    logger.debug("collect + broadcast time = %f".format( (t2-t1) / 1000000.0))
++//
++//    val result = leftRDD.multigetBroadcast(rightRDD, leftSchema, rightSchema, right.output, rightCol)
++//    result
++//  }
++//}
+diff --git a/src/main/scala/indexeddataframe/strategies.scala b/src/main/scala/indexeddataframe/strategies.scala
+index 0c42c6b..8616e44 100644
+--- a/src/main/scala/indexeddataframe/strategies.scala
++++ b/src/main/scala/indexeddataframe/strategies.scala
+@@ -37,12 +37,13 @@ object IndexedOperators extends Strategy {
+           val rightColNo = rChild.output.indexWhere(rightKeys(0).toString() == _.toString())
+           println("leftcol = %d, rightcol = %d".format(leftColNo, rightColNo))
+ //          println(condition.get.sql)
++
+           val subPlan = IndexedShuffledEquiJoinExec(planLater(left), planLater(right), leftColNo, rightColNo, leftKeys, rightKeys)
+-          if (condition.isEmpty) {
++//          if (condition.isEmpty) {
+             subPlan :: Nil
+-          } else {
+-            FilterExec(condition.get, subPlan) :: Nil
+-          }
++//          } else {
++//            FilterExec(condition.get, subPlan) :: Nil
++//          }
+         }
+         case _ => Nil
+       }
